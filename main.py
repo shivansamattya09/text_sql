@@ -9,23 +9,78 @@ import joblib
 import numpy as np
 from dotenv import load_dotenv
 import os
+import torch
+import sqlparse
+
 
 # Load environment variables from .env file
 load_dotenv()
 
 # Load Scikit-learn model
-model = joblib.load('data.pkl')  # Ensure this is a scikit-learn model
+model = joblib.load('new_model.pkl')
 
 # Configuration
-SECRET_KEY = os.getenv("SECRET_KEY", "your_default_secret_key")  # fallback in case .env is missing
+SECRET_KEY = os.getenv("SECRET_KEY", "your_default_secret_key")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+# Default template and schema
+PROMPT_TEMPLATE = """<|begin_of_text|><|start_header_id|>user<|end_header_id|>
+
+Generate a SQL query to answer this question: `{question}`
+
+DDL statements:
+
+{schema}
+
+<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+The following SQL query best answers the question `{question}`:
+```sql
+"""
+
+DEFAULT_SCHEMA = """CREATE TABLE products (
+  product_id INTEGER PRIMARY KEY,
+  name VARCHAR(50),
+  price DECIMAL(10,2),
+  quantity INTEGER  
+);
+
+CREATE TABLE customers (
+   customer_id INTEGER PRIMARY KEY,
+   name VARCHAR(50),
+   address VARCHAR(100)
+);
+
+CREATE TABLE salespeople (
+  salesperson_id INTEGER PRIMARY KEY,
+  name VARCHAR(50),
+  region VARCHAR(50)
+);
+
+CREATE TABLE sales (
+  sale_id INTEGER PRIMARY KEY,
+  product_id INTEGER,
+  customer_id INTEGER,
+  salesperson_id INTEGER,
+  sale_date DATE,
+  quantity INTEGER
+);
+
+CREATE TABLE product_suppliers (
+  supplier_id INTEGER PRIMARY KEY,
+  product_id INTEGER,
+  supply_price DECIMAL(10,2)
+);"""
+
+# Global state management
+CURRENT_SCHEMA = DEFAULT_SCHEMA
 
 # Fake user database
 fake_users_db = {
     "user": {
         "username": "user",
-        "hashed_password": "$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW",  # password: "secret"
+        "hashed_password": "$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW",
     }
 }
 
@@ -45,6 +100,15 @@ class TokenData(BaseModel):
 
 class PredictionInput(BaseModel):
     features: List[float]
+
+class SQLRequest(BaseModel):
+    question: str
+
+class SchemaUpdate(BaseModel):
+    schema_text: str
+
+class CurrentSchemaResponse(BaseModel):
+    current_schema: str
 
 # Security setup
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -117,7 +181,100 @@ async def predict(input_data: PredictionInput, current_user: User = Depends(get_
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-# Uvicorn entrypoint
+@app.post("/generate-sql")
+async def generate_sql(
+    request: SQLRequest,
+    current_user: User = Depends(get_current_user)
+):
+    try:
+        # Call generate_query from the loaded pkl model
+        raw_sql = model.generate_query(request.question)
+
+        # Format SQL for readability using sqlparse
+        formatted_sql = sqlparse.format(
+            raw_sql.strip(),
+            reindent=True,
+            indent_width=4,
+            keyword_case='upper'
+        )
+
+        return {
+            "question": request.question,
+            "sql": formatted_sql,
+            "user": current_user.username
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+# @app.post("/generate-sql")
+# async def generate_sql(
+#     request: SQLRequest, 
+#     current_user: User = Depends(get_current_user)
+# ):
+#     try:
+#         # Use the model's generate_query function directly
+#         raw_sql = model.generate_query(request.question)
+        
+#         # Format with sqlparse
+#         formatted_sql = sqlparse.format(
+#             raw_sql,
+#             reindent=True,
+#             indent_width=4,
+#             keyword_case='upper'
+#         )
+        
+#         return {
+#             "question": request.question,
+#             "sql": formatted_sql,
+#             "user": current_user.username
+#         }
+#     except Exception as e:
+#         raise HTTPException(status_code=400, detail=str(e))
+
+# @app.post("/generate-sql")
+# async def generate_sql(
+#     request: SQLRequest, 
+#     current_user: User = Depends(get_current_user)
+# ):
+#     try:
+#         formatted_prompt = PROMPT_TEMPLATE.format(
+#             schema=CURRENT_SCHEMA,
+#             question=request.question
+#         )
+#         generated = model.generate(formatted_prompt)
+#         sql_query = generated.split("```sql")[1].split("```")[0].strip()
+#         return {
+#             "question": request.question,
+#             "sql": sql_query,
+#             "user": current_user.username
+#         }
+#     except IndexError:
+#         raise HTTPException(
+#             status_code=400, 
+#             detail="Model output format unexpected - could not extract SQL query"
+#         )
+#     except Exception as e:
+#         raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/set-schema")
+async def set_schema(
+    update: SchemaUpdate,
+    current_user: User = Depends(get_current_user)
+):
+    global CURRENT_SCHEMA
+    CURRENT_SCHEMA = update.schema_text
+    return {"message": "Schema updated successfully"}
+
+@app.get("/get-schema", response_model=CurrentSchemaResponse)
+async def get_schema(current_user: User = Depends(get_current_user)):
+    return {"current_schema": CURRENT_SCHEMA}
+
+# Add CUDA memory management (if using GPU)
+@app.on_event("shutdown")
+def shutdown_event():
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
