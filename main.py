@@ -194,7 +194,7 @@ async def generate_sql(
         prompt = PROMPT_TEMPLATE.format(schema=CURRENT_SCHEMA, question=request.question)
 
         inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-        outputs = model.generate(**inputs, max_new_tokens=256, do_sample=True)
+        outputs = model.generate(**inputs, max_new_tokens=256,temperature=0.7,do_sample=True)
         raw_output = tokenizer.decode(outputs[0], skip_special_tokens=True)
 
         # Optional: Extract SQL block from output if using format like ```sql ... ```
