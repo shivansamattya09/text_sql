@@ -173,15 +173,6 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
-@app.post("/predict")
-async def predict(input_data: PredictionInput, current_user: User = Depends(get_current_user)):
-    try:
-        features = np.array(input_data.features).reshape(1, -1)
-        prediction = model.predict(features)
-        return {"prediction": prediction.tolist(), "user": current_user.username}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
 # Load the tokenizer (you need the same one used with the Llama model)
 tokenizer = AutoTokenizer.from_pretrained("defog/llama-3-sqlcoder-8b")
 

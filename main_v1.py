@@ -11,14 +11,13 @@ from dotenv import load_dotenv
 import os
 import torch
 import sqlparse
-from transformers import AutoTokenizer
 
 
 # Load environment variables from .env file
 load_dotenv()
 
 # Load Scikit-learn model
-model = joblib.load('model.pkl')
+model = joblib.load('new_model.pkl')
 
 # Configuration
 SECRET_KEY = os.getenv("SECRET_KEY", "your_default_secret_key")
@@ -182,29 +181,18 @@ async def predict(input_data: PredictionInput, current_user: User = Depends(get_
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-# Load the tokenizer (you need the same one used with the Llama model)
-tokenizer = AutoTokenizer.from_pretrained("defog/llama-3-sqlcoder-8b")
-
 @app.post("/generate-sql")
 async def generate_sql(
     request: SQLRequest,
     current_user: User = Depends(get_current_user)
 ):
     try:
-        prompt = PROMPT_TEMPLATE.format(schema=CURRENT_SCHEMA, question=request.question)
+        # Call generate_query from the loaded pkl model
+        raw_sql = model.generate_query(request.question)
 
-        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-        outputs = model.generate(**inputs, max_new_tokens=256,temperature=0.7,do_sample=True)
-        raw_output = tokenizer.decode(outputs[0], skip_special_tokens=True)
-
-        # Optional: Extract SQL block from output if using format like ```sql ... ```
-        if "```sql" in raw_output:
-            sql_query = raw_output.split("```sql")[1].split("```")[0].strip()
-        else:
-            sql_query = raw_output.strip()
-
+        # Format SQL for readability using sqlparse
         formatted_sql = sqlparse.format(
-            sql_query,
+            raw_sql.strip(),
             reindent=True,
             indent_width=4,
             keyword_case='upper'
@@ -215,10 +203,58 @@ async def generate_sql(
             "sql": formatted_sql,
             "user": current_user.username
         }
-
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+    
+# @app.post("/generate-sql")
+# async def generate_sql(
+#     request: SQLRequest, 
+#     current_user: User = Depends(get_current_user)
+# ):
+#     try:
+#         # Use the model's generate_query function directly
+#         raw_sql = model.generate_query(request.question)
+        
+#         # Format with sqlparse
+#         formatted_sql = sqlparse.format(
+#             raw_sql,
+#             reindent=True,
+#             indent_width=4,
+#             keyword_case='upper'
+#         )
+        
+#         return {
+#             "question": request.question,
+#             "sql": formatted_sql,
+#             "user": current_user.username
+#         }
+#     except Exception as e:
+#         raise HTTPException(status_code=400, detail=str(e))
 
+# @app.post("/generate-sql")
+# async def generate_sql(
+#     request: SQLRequest, 
+#     current_user: User = Depends(get_current_user)
+# ):
+#     try:
+#         formatted_prompt = PROMPT_TEMPLATE.format(
+#             schema=CURRENT_SCHEMA,
+#             question=request.question
+#         )
+#         generated = model.generate(formatted_prompt)
+#         sql_query = generated.split("```sql")[1].split("```")[0].strip()
+#         return {
+#             "question": request.question,
+#             "sql": sql_query,
+#             "user": current_user.username
+#         }
+#     except IndexError:
+#         raise HTTPException(
+#             status_code=400, 
+#             detail="Model output format unexpected - could not extract SQL query"
+#         )
+#     except Exception as e:
+#         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/set-schema")
 async def set_schema(
